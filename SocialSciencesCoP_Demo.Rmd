@@ -1,0 +1,535 @@
+---
+title: "Social Sciences CoP Presentation"
+author: "Matthew DeLoia, matthew.deloia@ngc.com"
+date: "9/2/2020"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#load libraries
+
+library (memisc)
+library(chron)
+library(cluster)
+library(corrplot)
+library(eRm)
+library(foreign)
+library(gganimate)
+library(ggcorrplot)
+library(ggdendro)
+library(hms)
+library(imputeMissings)
+library(lubridate)
+library(mclust)
+library(plotly)
+library(pracma)
+library(randomForest)
+library(readxl)
+library(Rmisc)
+library(stringr)
+library(tidyverse)
+library(tm)
+library(wordcloud)
+library(wordcloud2)
+library(janitor)
+library(lavaan)
+library(DecisionAnalysis)
+
+likertNum <- function(x){
+        case_when(
+                x == "Very Accurate" ~ 5,
+                x == "Moderately Accurate" ~ 4,
+                x == "Neither Accurate Nor Inaccurate" ~ 3,
+                x == "Moderately Inaccurate" ~ 2,
+                x == "Very Inaccurate" ~ 1
+        )
+}
+
+likertNum2 <- function(x){
+  case_when(
+    x == "VERY ACCURATE" ~ 5,
+    x == "MODERATELY ACCURATE" ~ 4,
+    x == "NEITHER INACC NOR ACCUR" ~ 3,
+    x == "MODERATELY INACCURATE" ~ 2,
+    x == "VERY INACCURATE" ~ 1
+  )
+}
+
+#Load and Process Eugene-Springfield dataset
+df_ESDemo <- as.data.set(spss.portable.file("demographics.por"), to.data.frame=T)
+df_ESDemo <-as.data.frame(df_ESDemo)
+df_ES <- as.data.set(spss.portable.file("IPIP2539-1.por"), to.data.frame=T)
+df_ES <- as.data.frame(df_ES)
+df_ES2 <- df_ES %>% dplyr::select (ID, A1:A99, C1:C9, M1:M9) %>% gather(A1:A99, C1:C9, M1:M9, key=Question, value = Response, na.rm = TRUE)
+df_ES2$Response <- toupper(df_ES2$Response)
+df_ES3 <- df_ES2 %>% 
+  mutate_at(vars(`Response`), likertNum2) %>% 
+  spread(key=Question, value=Response) 
+df_ES4 <- df_ES %>%  dplyr::select(-(A1:A99),-(C1:C9), -(M1:M9)) %>% left_join(df_ES3, by="ID")
+df_ES5 <- df_ESDemo %>% left_join(df_ES4, by="ID")
+df_ES5$ID <- as.character(df_ES5$ID)
+df_ESscored <- df_ES5 %>% group_by(ID) %>% 
+  mutate(Anxiety = (sum(H926,H980, S3, H761, X107 ) ),      
+         Social_Astuteness = (sum(H1137, P432, P451, V96, V153)),
+         Breadth_of_Interest = (sum(X211, V140, V2, V330, H1265) ), 
+         Complexity = (sum(H1276, Q228, H1267, H1284, V256) ), 
+         Social_Confidence = (sum(H1110,S29,P364, H1366, H16 ) ), 
+         Cooperativeness = (sum(P420,E147,D107,E68, H974)),  
+         Empathy = (sum(D19, X253,H173,	D6,Q256) ), 
+         Energy_Level = (sum(H54,	H555,H554,Q151,H79) ), 
+         Innovation = (sum(H53,	V259,V226, H447,  X225) ),  
+         Organization  = (sum(V98,Q163,V261, H258, V12) ), 
+         Responsibility = (sum(H152,V303, D10, E80,V170) ), 
+         Risk_Taking = (sum(S19,S4, R77, R58, Q126) ), 
+         Sociability = (sum(D70,X161, H78, H985, Q238) ), 
+         Tolerance = (sum(H148, Q59, X59, D113, X90) ),
+         Traditional_Values = (sum(D88, V46, Q44, H296, X76) ) ) %>%
+  dplyr::select (ID, SEX, AGE, EMPLOY, Anxiety:Traditional_Values) %>%
+  dplyr::rename(Age = AGE, Gender = SEX) %>% na.omit() 
+df_ESscored$Gender <- gsub("M", "Male", df_ESscored$Gender )
+df_ESscored$Gender <- gsub("F", "Female", df_ESscored$Gender )
+
+#filter to desired comparative population
+df_ESscored2 <- df_ESscored  %>%  dplyr::select(ID, Gender, Age, Anxiety:Traditional_Values )  %>% na.omit()
+summaryES <- df_ESscored2 %>% gather(Anxiety:Traditional_Values, key=Dimension, value=Score) %>% summarySE(groupvars = "Dimension", measurevar = "Score" )
+
+anxiety <- summaryES %>% filter(Dimension=="Anxiety")
+breadth_of_interest <- summaryES %>% filter(Dimension=="Breadth_of_Interest")
+complexity <- summaryES %>% filter(Dimension=="Complexity")
+cooperativeness <- summaryES %>% filter(Dimension=="Cooperativeness")
+empathy <- summaryES %>% filter(Dimension=="Empathy")
+energy_level <- summaryES %>% filter(Dimension=="Energy_Level")
+innovation <- summaryES %>% filter(Dimension=="Innovation")
+organization <- summaryES %>% filter(Dimension=="Organization")
+responsibility <- summaryES %>% filter(Dimension=="Responsibility")
+risk_taking <- summaryES %>% filter(Dimension=="Risk_Taking")
+sociability <- summaryES %>% filter(Dimension=="Sociability")
+social_astuteness <- summaryES %>% filter(Dimension=="Social_Astuteness")
+social_confidence <- summaryES %>% filter(Dimension=="Social_Confidence")
+tolerance <- summaryES %>% filter(Dimension=="Tolerance")
+traditional_values <- summaryES %>% filter(Dimension=="Traditional_Values")
+responsibility <- summaryES %>% filter(Dimension=="Responsibility")
+
+
+#load data
+
+df <- read_excel("SocialScienceCoP_dataset28Aug20.xls") %>% rownames_to_column("ID") 
+
+#Processing Demograpic data (Hobbies)
+
+df_hobby <-df %>% select(Hobbies) 
+df_hobby$Hobbies<- gsub("\\(", "", df_hobby$Hobbies)
+df_hobby$Hobbies<- gsub("\\)", "", df_hobby$Hobbies)
+df_hobby2<-df_hobby %>% separate(Hobbies, c("Hobbies1", "Hobbies2", "Hobbies3", "Hobbies4", "Hobbies5", "Hobbies6", "Hobbies7", "Hobbies8"), sep=",") %>%
+  gather(Hobbies1:Hobbies8, key=Category, value=Hobbies) %>% select (-Category ) %>%
+  na.omit(df_hobby)
+
+#Weighting Criteria
+df_weight <- df %>% select(PW1:PW28) %>% gather(key=Comparison, value=Trait) %>% filter(Trait !="Same") %>% na.omit() %>% group_by(Trait) %>% summarise (count=n()) 
+df_maxcount <- df_weight %>% summarise(maximum=max(count)) 
+df_weight <-  df_weight %>% mutate(weight=(count/df_maxcount$maximum)) %>% as.data.frame()
+
+#Scoring respondant data        
+df_scores <- df %>%   
+        mutate_at(vars(P_AN5:P_RE4), likertNum)
+
+#Summary scores for personality
+df_scored <- df_scores %>% dplyr::group_by(ID) %>% 
+  mutate(Anxiety = (sum(P_AN1, P_AN2, P_AN3, P_AN4, P_AN5 ) ) ,
+                Social_Astuteness = (sum(P_AS1, P_AS2, P_AS3, P_AS4, P_AS5	)),
+                Breadth_of_Interest = (sum(P_BR1, P_BR2, P_BR3, P_BR4, P_BR5	) ) ,
+                Complexity = (sum(P_CM1, P_CM2, P_CM3, P_CM4, P_CM5) ) ,
+                Social_Confidence = (sum(P_CD1, P_CD2, P_CD3, P_CD4, P_CD5) ) ,
+                Cooperativeness = (sum(P_CO1, P_CO2, P_CO3, P_CO4, P_CO5)),
+                Empathy = (sum(P_EM1, P_EM2, P_EM3, P_EM4, P_EM5) ) , 
+                Energy_Level = (sum(P_EN1, P_EN2, P_EN3, P_EN4, P_EN5)) ,
+                Innovation = (sum(P_IN1, P_IN2, P_IN3, P_IN4, P_IN5) ) , 
+                Organization = (sum(P_OR1, P_OR2, P_OR3, P_OR4, P_OR5 ) ) , 
+                Responsibility = (sum(P_RE1, P_RE2, P_RE3, P_RE4, P_RE5) ) ,
+                Risk_Taking = (sum(P_RI1, P_RI2, P_RI3, P_RI4, P_RI5	) ) , 
+                Sociability = (sum(P_SO1, P_SO2, P_SO3, P_SO4, P_SO5 ) ) , 
+                Tolerance = (sum(P_TO1, P_TO2, P_TO3, P_TO4, P_TO5 ) ) ,
+                Traditional_Values= (sum(P_TR1, P_TR2, P_TR3, P_TR4, P_TR5) )) %>% 
+  select(ID, Group, Name, Anxiety:Traditional_Values, Email)
+
+df_scored <- as.data.frame(df_scored)
+
+#Scale socres to ES sample (n=151)
+df_scored2 <- df_scored %>%
+  group_by(ID) %>%
+  mutate(Anxiety= (Anxiety-anxiety$Score) / anxiety$sd)   %>% 
+  mutate(Breadth_of_Interest= (Breadth_of_Interest-breadth_of_interest$Score)/breadth_of_interest$sd)  %>% 
+  mutate(Complexity= (Complexity - complexity$Score)/ complexity$sd)  %>% 
+  mutate(Cooperativeness= (Cooperativeness-cooperativeness$Score)/cooperativeness$sd)  %>% 
+  mutate(Empathy= (Empathy-empathy$Score)/empathy$sd) %>% 
+  mutate(Energy_Level= (Energy_Level-energy_level$Score)/energy_level$sd) %>% 
+  mutate(Innovation= (Innovation-innovation$Score)/innovation$sd)  %>%
+  mutate(Organization= (Organization-organization$Score)/organization$sd) %>% 
+  mutate(Responsibility= (Responsibility-responsibility$Score)/responsibility$sd) %>% 
+  mutate(Risk_Taking= (Risk_Taking-risk_taking$Score)/risk_taking$sd)  %>% 
+  mutate(Sociability= (Sociability-sociability$Score)/sociability$sd) %>%
+  mutate(Social_Astuteness= (Social_Astuteness-social_astuteness$Score)/social_astuteness$sd) %>%
+  mutate(Social_Confidence= (Social_Confidence-social_confidence$Score)/social_confidence$sd)  %>%
+  mutate(Tolerance= (Tolerance-tolerance$Score)/tolerance$sd) %>%
+  mutate(Traditional_Values= (Traditional_Values-traditional_values$Score)/traditional_values$sd)
+
+df_scored2 <- as.data.frame(df_scored2)
+
+   
+#Confirmatory Factor Analysis Function
+cfafunction <- function(df_dimension, m3a) {
+df_dimension <- data.frame(df_dimension, row.names=1)
+df_dimension <- na.omit (df_dimension)
+onefactoranalysis <- cfa(m3a, data=df_dimension, std.lv=TRUE) 
+summary(onefactoranalysis, fit.measures=TRUE, standardized=TRUE)
+}
+
+#CFA_Empathy
+df_empathy <- df_scores %>% select(ID, P_EM1, P_EM2, P_EM3, P_EM4, P_EM5)
+m3a_empathy <- 'f =~ 	P_EM1 + P_EM2 + P_EM3 + P_EM4 + P_EM5  '
+cfafunction(df_empathy, m3a_empathy)
+
+#CFA_Anxiety
+df_anxiety <- df_scores %>% select(ID, P_AN1, P_AN2, P_AN3, P_AN4, P_AN5)
+m3a_anxiety <- 'f =~ 	P_AN1 + P_AN2 + P_AN3 + P_AN4 + P_AN5  '
+cfafunction(df_anxiety, m3a_anxiety)
+
+#CFA_Risk
+df_risk <- df_scores %>% select(ID, P_RI1, P_RI2, P_RI3, P_RI4, P_RI5)
+m3a_risk <- 'f =~ 	P_RI1 + P_RI2 + P_RI3 + P_RI4 + P_RI5  '
+cfafunction(df_risk, m3a_risk)
+
+#CFA_Innovation
+df_innovation <- df_scores %>% select(ID, P_IN1, P_IN2, P_IN3, P_IN4, P_IN5)
+m3a_innovation <- 'f =~ 	P_IN1 + P_IN2 + P_IN3 + P_IN4 + P_IN5  '
+cfafunction(df_innovation, m3a_innovation)
+```
+## Purpose  
+Review a methodology for personality scale development  and showcase features of R statistical program  language and  R Markdown.  
+
+This session follows the "IPIP Scale Construction Procedures" available at: https://ipip.ori.org/newScaleConstruction.htm .
+
+<div class="blue">Hypothesis to test during this Session:  The Social Science "fit" of members of this CoP is similar to those performing other roles for Northrop Grumman. </div>
+
+<div class="notes">
+Empirical evidence is required to "to reject the null" and conclude that Social Scientists have a distinguishing personality profile.  
+</div>
+
+## Personality Assessment Overview
+This 75 question personality assessment you completed aims to measure 15 underlying personality traits.  Measurements are similar to the <a href="https://w8y7a2j5.stackpathcdn.com/wp-content/uploads/2015/03/JPI-R-Scales.pdf">Jackson Personality Inventory - Revised (JPI-R)</a>.  
+
+This ***JPI-R proxy*** consists of questions drawn from the public domain repository of personality questions  (https://ipip.ori.org/). <br>
+
+## JPI-R Personality Dimensions
+
+<div class="columns-2">
+***Analytical Scales***
+
+- Complexity 
+- Breadth of Interest
+- Innovation
+- Tolerance
+
+***Extroverted Scales***
+
+- Sociability 
+- Social Confidence 
+- Energy Level
+
+***Emotional*** 
+
+- Empathy 
+- Anxiety 
+- Cooperativeness 
+
+***Opportunistic*** 
+
+- Risk Taking 
+- Social Astuteness 
+
+***Dependable***
+
+- Organization 
+- Traditional Values 
+- Responsibility
+</div>
+
+<div class="notes">
+- Complexity: seeks intricate solutions to problems
+- Tolerance: accepts people even though they may differ from oneself; welcomes dissent
+- Cooperativeness: is susceptible to social influence and group pressures; follows suit
+- Social Astuteness: skillful at persuading others to achieve a particular goal; occasionally seen as manipulative of others
+- Traditional Values: values traditional customs and beliefs; others may view individual as "old-fashioned"
+- Responsibility: strong obligation to be honest and upright; an inflexibly conscience
+</div>
+
+## Scale Construction Process (1 of 2)
+
+1. Correlate IPIP items (3,000) to 15 JPI-R dimensions and rank order IPIP items based on correlations. https://ipip.ori.org/ 
+2. Inspect the highest positively correlated items for: alignment to intent of the JPI-R measurement and redundancy to other top questions. https://github.com/mattdeloia/JPIR_Analysis
+3. Select the best five questions that tell a coherent story and perform reliability analysis of the items (confirmatory factor analysis using lavaan package in R).
+4. Repeat question selection until achievement of a good fit model (TLI > 0.9).
+
+*Data from ~400 individuals, JPI-R raw scores and IPIP question responses, are available in the Eugene-Springfield dataset. https://dataverse.harvard.edu/dataverse/ESCS-Data.
+
+## Scale Construction Process (2 of 2)
+<div class="columns-2">
+***Anxiety Items***
+
+- P_EM1	Am passionate about bettering the world's condition
+- P_EM2	Often do nice things for people
+- P_EM3	Know how to comfort others
+- P_EM4	Am sensitive to the needs of others
+- P_EM5	Am deeply moved by others' misfortunes
+
+***Innovation Items***
+
+- P_IN1	Come up with bold plans
+- P_IN2	Am full of ideas
+- P_IN3	Am an original thinker
+- P_IN4	Have an imagination that stretches beyond that of my friends
+- P_IN5	Love to think up new ways of doing things
+</div>
+
+<div class="notes">
+Confirmatory factor analysis helps decide how well the data fits the model.  
+
+Informs revisions revisions following scale construction and data collection.
+</div>
+
+```{r Confirmatory Factor Analysis, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+#CFA_Anxiety
+df_anxiety <- df_scores %>% select(ID, P_AN1, P_AN2, P_AN3, P_AN4, P_AN5)
+m3a_anxiety <- 'f =~ 	P_AN1 + P_AN2 + P_AN3 + P_AN4 + P_AN5  '
+cfafunction(df_anxiety, m3a_anxiety)
+
+#CFA_Innovation
+df_innovation <- df_scores %>% select(ID, P_IN1, P_IN2, P_IN3, P_IN4, P_IN5)
+m3a_innovation <- 'f =~ 	P_IN1 + P_IN2 + P_IN3 + P_IN4 + P_IN5  '
+cfafunction(df_innovation, m3a_innovation)
+```
+
+## CoP Personality Results (1 of 2)
+
+```{r ScaledScores, echo=FALSE, message=FALSE, warning=FALSE}
+
+personality_results2 <- df_scored2 %>% filter(Group=="SocialScience") %>% 
+  gather(Anxiety:Traditional_Values, key=Dimension, value = Score) %>% group_by(Dimension) %>% 
+  arrange(Dimension, ID) %>%  mutate(Average = movavg(Score, 8, type="s"))
+
+personality_results2$ID <- as.integer(personality_results2$ID)
+
+q <- personality_results2 %>%     
+        ggplot(aes(x=reorder(Dimension, Average, FUN=mean), y=round(Average, 2), color=Dimension)) + 
+        geom_point(size=3) +
+        coord_flip() + ylim(-2.5,2.5) +
+        geom_hline(yintercept=0, linetype="dotted") +
+        xlab("") +
+     ylab("moving average (z score)") +
+        theme(legend.title= element_text(color="black", size=10), legend.position = "blank") 
+ 
+  anim2 <- q + transition_time(ID) +  labs(title = "ID {frame_time}") + shadow_wake(wake_length = 0.1, alpha = FALSE)
+animate(anim2, height=500, width=600)
+```
+
+## CoP Personality Results (2 of 2)
+
+<div class="notes">
+What aspects of personality are most stable or like the general workforce?
+</div>
+
+```{r PersonalityResults, echo=FALSE, message=FALSE, warning=FALSE}
+personality_results <- df_scored2  %>% filter(Group=="SocialScience") %>% 
+  gather(Anxiety:Traditional_Values, key=Dimension, value = Score) %>%
+  summarySE(measurevar = "Score", groupvars = "Dimension") %>%
+   mutate(Comparison = if_else(Score<=-.5, "Low", if_else(Score>=.5, "High", "Average")))
+personality_results$Comparison <- factor (personality_results$Comparison, levels = c("High", "Average", "Low"))
+
+personality_results %>% 
+        mutate(Dimension=reorder(Dimension, Score, FUN=max)) %>%    
+        ggplot(aes(x=Dimension, y=round(Score, 2), color=Comparison)) + 
+        geom_point() +
+        geom_errorbar(aes(ymin=Score-ci, ymax=Score+ci), width=.1 ) +
+        coord_flip() + ylim(-2.5,2.5) +
+        geom_hline(yintercept=0, linetype="dotted") +
+        xlab("") +
+     ylab("group mean with 95% ci (z score)") +
+        scale_color_manual(name="general workforce comparison", values=c("green", "darkgray", "blue")) +
+  theme(legend.title= element_text(color="black", size=10), legend.position = "top") + 
+  labs(caption = "Note: z scores developed from ES Sample data (n~400)")
+```
+
+## CoP Analysis | Hierarchical Clustering Dendrogram
+
+```{r HClustering, echo=FALSE, warning=FALSE}
+clustering <- df_scores  %>% filter(Group=="SocialScience") %>% 
+     select(P_AN5:P_RE4, Name) %>% column_to_rownames ("Name")
+h_cluster <- hclust(dist(clustering))
+h_cluster %>% ggdendrogram(rotate=TRUE, theme_dendro = TRUE, size=1)
+```
+
+
+## Value Modeling (1 of 3) | Evaluate Candidate Solutions
+
+- Define Objective -> social science "Fit"
+- Value Measures -> 8 latent traits selected among the 15 personality dimensions assessed
+- Weights -> weights assigned to measures that reflect importance and range of scale
+- Score -> raw scores determined from the personality assessment results (0 - 20)
+- Value function -> function that assigns value to the score (ex. S curve, linear)
+- Overall Score -> summation of ***weights x values*** across all measures
+
+## Value Modeling (2 of 3)
+
+8 of 15 traits were chosen to determine social science "fit"; experts rated importance of personality traits using AHP.
+
+```{r Weightings, echo=FALSE, message=FALSE}
+df_weight %>% ggplot(aes(x=reorder(Trait, weight, FUN=max), y=round(weight,2), label=round(weight,2))) + geom_col (fill="skyblue") + coord_flip() + geom_text () + xlab("") + ylab("Trait Weighting")
+```
+
+## Value Modeling (3 of 3)
+
+Value model with ***value measures*** and ***weights*** displayed below.
+```{r Model, echo=FALSE, message=FALSE}
+branches <- as.data.frame(matrix(ncol=3, nrow = 8))
+names(branches) <- c("Level1",  "leaves", "weights")
+branches[1,] <- rbind("SocialScienceFit", "Responsibility", "1.00")
+branches[2,] <- rbind("SocialScienceFit", "Energy", "1.00")
+branches[3,] <- rbind("SocialScienceFit", "Complexity", "0.92")
+branches[4,] <- rbind("SocialScienceFit", "Organization", "0.81")
+branches[5,] <- rbind("SocialScienceFit", "Confidence", "0.81")
+branches[6,] <- rbind("SocialScienceFit", "Tolerance", "0.73")
+branches[7,] <- rbind("SocialScienceFit", "Empathy", "0.58")
+branches[8,] <- rbind("SocialScienceFit", "Cooperativeness (R)", "0.46")
+value_hierarchy_tree(branches$Level1,leaves=branches$leaves, weights=branches$weights, nodefillcolor="lightblue", leavesfillcolor = "green", leavesfontcolor = "black")
+```
+
+## Results (1 of 2)
+
+```{r FitScores, echo=FALSE, message=FALSE}
+df_fitscore   <- df_scored %>% 
+  mutate(Cooperativeness=(26-Cooperativeness)) %>%
+  gather(Anxiety:Traditional_Values, key=Trait, value=RawScore) %>%
+  select(ID, Group, Trait, RawScore)
+
+df_fitscore2 <- df_fitscore %>% left_join (df_weight, by = "Trait") %>%
+  na.omit() %>% 
+  mutate(WeightedScore = (RawScore*weight)) %>% 
+  group_by(ID, Group) %>% 
+  summarise(FitScore=sum(WeightedScore)) %>% as.data.frame() %>% mutate_at(vars(FitScore), scale)
+
+df_fitscore2 %>% ggplot() + 
+  geom_density(aes(x=FitScore, fill=Group), alpha=.7) +
+  scale_fill_manual (values= c("gray", "skyblue"))
+```
+
+## Results (2 of 2)
+
+<div class="notes">
+Hypothesis to test during this Session:  The Social Science "fit" of members of this CoP is similar to those performing other roles for Northrop Grumman. 
+
+Do you ***accept*** or ***reject*** this null hypothesis?
+</div>
+
+```{r FitScores2, echo=FALSE, message=FALSE, warning=FALSE}
+df_fitscore2 %>% ggplot(aes(x=Group, y=FitScore, fill=Group)) + 
+  geom_boxplot() +
+  scale_fill_manual (values= c("gray", "skyblue")) +
+  stat_summary(aes(label=round(..y..,2)), fun.y = "median", geom="text", size=3, color="red", vjust=-.5)
+```
+
+## Alternative Approach (Profile Analysis)
+6 traits chosen to determine "fit." These traits suggest a unique personality profile due to differences from the ES sample.
+
+```{r Model2, echo=FALSE, message=FALSE}
+branchesb <- as.data.frame(matrix(ncol=3, nrow = 6))
+names(branchesb) <- c("Level1",  "leaves", "weights")
+branchesb[1,] <- rbind("SocialScienceFit", "Risk_Taking", "1.00")
+branchesb[2,] <- rbind("SocialScienceFit", "Tolerance", "1.00")
+branchesb[3,] <- rbind("SocialScienceFit", "Innovation", "1.00")
+branchesb[4,] <- rbind("SocialScienceFit", "Breadth_of_Interest", "1.00")
+branchesb[5,] <- rbind("SocialScienceFit", "Anxiety (R)", "1.00")
+branchesb[6,] <- rbind("SocialScienceFit", "Cooperativeness (R)", "1.00")
+value_hierarchy_tree(branchesb$Level1,leaves=branchesb$leaves, weights=branchesb$weights, nodefillcolor="lightblue", leavesfillcolor = "green", leavesfontcolor = "black")
+```
+
+## Alternative Approach Results
+
+```{r FitScores3, echo=FALSE, message=FALSE, warning=FALSE}
+df_fitscore3   <- df_scored %>% select(ID, Group, Risk_Taking, Tolerance, Innovation, Breadth_of_Interest, Anxiety, Cooperativeness) %>% mutate(Cooperativeness=(30-Cooperativeness), Anxiety=(30-Anxiety)) %>%
+  gather(Risk_Taking:Cooperativeness, key=Trait, value=RawScore) %>%
+  select(ID, Group, Trait, RawScore)  %>% 
+  group_by(ID, Group) %>% 
+  summarise(FitScore=sum(RawScore)) %>% as.data.frame() %>% mutate_at(vars(FitScore), scale)
+
+df_fitscore3 %>% ggplot(aes(x=Group, y=FitScore, fill=Group)) + 
+  geom_boxplot() +
+  scale_fill_manual (values= c("gray", "skyblue")) +
+  stat_summary(aes(label=round(..y..,2)), fun.y = "median", geom="text", size=3, color="red", vjust=-.5)
+```
+<div class="notes">
+Hypothesis to test during this Session:  The Social Science "fit" of members of this CoP is similar to those performing other roles for Northrop Grumman. 
+
+Do you ***accept*** or ***reject*** this null hypothesis?
+</div>
+
+## Hobbies Word Cloud 
+
+```{r Hobbies, message=FALSE, warning=FALSE, echo=FALSE}
+text2 <- df_hobby2$Hobbies# Create a corpus  
+docs2 <- Corpus(VectorSource(text2))
+docs2 <- docs2 %>%
+  #tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs2 <- tm_map(docs2, content_transformer(tolower))
+docs2 <- tm_map(docs2, removeWords, stopwords("english"))
+dtm2 <- TermDocumentMatrix(docs2) 
+matrix2 <- as.matrix(dtm2) 
+words2 <- sort(rowSums(matrix2),decreasing=TRUE) 
+df_text2 <- data.frame(word = names(words2),freq=words2)
+wordcloud2(data=df_text2, size=.4, color='random-dark', backgroundColor = "lightgray" )
+```
+
+## References {data-background="Picture1.png" data-background-size=cover} 
+
+Decision Making in Systems Engineering and Management (2nd ed.) edited by Gregory S. Parnell (Chapter 10, Problem Definition)
+
+IPIP Scale Construction Procedures available at: https://ipip.ori.org/newScaleConstruction.htm .
+
+
+
+## Back-Up: Trait Descriptions (1 of 3) 
+
+Analytical <br>
+
+ - Complexity: seeks intricate solutions to problems
+ - Breadth of Interest: interested in learning about a diversity of things
+ - Innovation: motivated to develop novel solutions to problems; values new ideas
+ - Tolerance: accepts people even though they may differ from oneself; welcomes dissent
+
+## Back-Up: Trait Descriptions (2 of 3) 
+Emotional 
+
+ - Empathy: tends to identify closely with other people and their problems
+ - Anxiety: tends to worry over inconsequential matters; apprehensive about the future
+ - Cooperativeness: is susceptible to social influence and group pressures; follows suit
+
+Extroversion 
+
+- Sociability: eagerly join a variety of social groups; actively social
+- Social Confidence: confident in dealing with others; shows presence in interpersonal situations
+- Energy level: is active and spirited; does not tire easily; capable of intense work for long periods
+
+## Back-Up: Trait Descriptions (3 of 3) 
+Opportunistic 
+
+- Social Astuteness: skillful at persuading others to achieve a particular goal; occasionally seen as manipulative of others, but ordinarily diplomatic
+- Risk Taking: enjoys gambling and taking a chance; willingly exposes self to situations with uncertain outcomes
+
+Dependable 
+
+- Organization: makes effective use of time; not easily distracted
+- Traditional Values: values traditional customs and beliefs; others may view individual as "old-fashioned"
+- Responsibility: strong obligation to be honest and upright; an inflexibly conscience   
